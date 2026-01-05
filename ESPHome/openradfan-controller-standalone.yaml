@@ -4,6 +4,7 @@ substitutions:
   time_zone: "Europe/London"
   control_temp_min: "20"
   control_temp_max: "35"
+  usable_pwm_min: "20%"
   
 # Add the global variable declaration
 globals:
@@ -182,13 +183,13 @@ output:
     pin: GPIO33
     frequency: 25000
     id: fan_speed_1
-    min_power: 0%
+    min_power: ${usable_pwm_min}
     zero_means_zero: True
   - platform: ledc
     pin: GPIO25
     frequency: 25000
     id: fan_speed_2
-    min_power: 0%
+    min_power: ${usable_pwm_min}
     zero_means_zero: True
 
 # Both fan channels are merged for simplicity
