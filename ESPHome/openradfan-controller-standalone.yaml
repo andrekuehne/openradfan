@@ -5,13 +5,29 @@ substitutions:
   control_temp_min: "20"
   control_temp_max: "35"
   usable_pwm_min: "20%"
-  
+
 # Add the global variable declaration
 globals:
   - id: enforce_temp_constraints_ptr
     type: std::function<void(float, int)>
   - id: calculate_curve_speed_ptr
     type: std::function<void(float)>
+  - id: nighttime_active
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: previous_fan_state
+    type: bool
+    restore_value: no
+    initial_value: 'true'
+  - id: previous_auto_control_state
+    type: bool
+    restore_value: no
+    initial_value: 'true'
+  - id: last_check_minutes
+    type: int
+    restore_value: no
+    initial_value: '-1'
 
 esphome:
   name: "${device_name}-standalone"
@@ -19,7 +35,7 @@ esphome:
   name_add_mac_suffix: true
   project:
     name: esphome.openradfan-controller
-    version: "1.2"
+    version: "1.4"
   on_boot:
     then:
       # indicate we have power with red LED
@@ -111,6 +127,13 @@ esp32:
   board: m5stack-atom
   framework:
     type: esp-idf
+    sdkconfig_options:
+      CONFIG_LWIP_MAX_SOCKETS: "16"
+      CONFIG_PM_ENABLE: "n"
+      # Prevent IDF from trying to power-down UART in light sleep, which causes
+      # uart_param_config to return ESP_ERR_NOT_SUPPORTED on some targets
+      CONFIG_PM_POWER_DOWN_PERIPHERAL_IN_LIGHT_SLEEP: "n"
+      CONFIG_UART_ISR_IN_IRAM: "y"
 
 # API is a requirement of the dashboard import.
 # api:
@@ -177,6 +200,99 @@ one_wire:
   - platform: gpio
     pin: GPIO22
 
+select:
+  - platform: template
+    name: "Night Schedule Start Hour"
+    id: night_start_hour
+    optimistic: true
+    restore_value: true
+    options:
+      - "00"
+      - "01"
+      - "02"
+      - "03"
+      - "04"
+      - "05"
+      - "06"
+      - "07"
+      - "08"
+      - "09"
+      - "10"
+      - "11"
+      - "12"
+      - "13"
+      - "14"
+      - "15"
+      - "16"
+      - "17"
+      - "18"
+      - "19"
+      - "20"
+      - "21"
+      - "22"
+      - "23"
+    initial_option: "22"
+    
+  - platform: template
+    name: "Night Schedule Start Minute"
+    id: night_start_minute
+    optimistic: true
+    restore_value: true
+    options:
+      - "00"
+      - "10"
+      - "20"
+      - "30"
+      - "40"
+      - "50"
+    initial_option: "00"
+    
+  - platform: template
+    name: "Night Schedule Stop Hour"
+    id: night_end_hour
+    optimistic: true
+    restore_value: true
+    options:
+      - "00"
+      - "01"
+      - "02"
+      - "03"
+      - "04"
+      - "05"
+      - "06"
+      - "07"
+      - "08"
+      - "09"
+      - "10"
+      - "11"
+      - "12"
+      - "13"
+      - "14"
+      - "15"
+      - "16"
+      - "17"
+      - "18"
+      - "19"
+      - "20"
+      - "21"
+      - "22"
+      - "23"
+    initial_option: "07"
+    
+  - platform: template
+    name: "Night Schedule Stop Minute"
+    id: night_end_minute
+    optimistic: true
+    restore_value: true
+    options:
+      - "00"
+      - "10"
+      - "20"
+      - "30"
+      - "40"
+      - "50"
+    initial_option: "00"
+
 switch:
   # Global On/Off switch (BTS462). Not exposed, will be used to turn off fans at 0 speed
   - platform: gpio
@@ -189,6 +305,12 @@ switch:
     name: "Auto Fan Curve Control"
     id: fan_curve_control
     restore_mode: "RESTORE_DEFAULT_ON" # "ALWAYS_OFF"
+    optimistic: true
+  # Switch to enable night schedule
+  - platform: template
+    name: "Night Schedule Enable"
+    id: enable_night_schedule
+    restore_mode: "RESTORE_DEFAULT_OFF"
     optimistic: true
 
 
@@ -443,7 +565,68 @@ interval:
   - interval: 10s
     then:
       - lambda: |-
-          if (id(fan_curve_control)->state && id(temperature_ds18b20_1)->has_state()) {
+          // Check for schedule edge triggers
+          ESP_LOGD("schedule", "Schedule enabled: %s, Time valid: %s", 
+                   id(enable_night_schedule)->state ? "YES" : "NO",
+                   id(sntp_time).now().is_valid() ? "YES" : "NO");
+          
+          if (id(enable_night_schedule)->state && id(sntp_time).now().is_valid()) {
+            auto time_now = id(sntp_time).now();
+            int current_minutes = time_now.hour * 60 + time_now.minute;
+            
+            int start_minutes = atoi(id(night_start_hour)->current_option()) * 60 + 
+                                atoi(id(night_start_minute)->current_option());
+            int end_minutes = atoi(id(night_end_hour)->current_option()) * 60 + 
+                              atoi(id(night_end_minute)->current_option());
+            
+            ESP_LOGD("schedule", "Current: %02d:%02d (%d min), Start: %d min, End: %d min, Last: %d min, Nighttime: %s",
+                     time_now.hour, time_now.minute, current_minutes, 
+                     start_minutes, end_minutes, id(last_check_minutes),
+                     id(nighttime_active) ? "YES" : "NO");
+            
+            // Only check for edges if we have a previous time
+            if (id(last_check_minutes) >= 0) {
+              // Check if we crossed the start threshold
+              bool crossed_start = id(last_check_minutes) < start_minutes && current_minutes >= start_minutes;
+              bool crossed_end = id(last_check_minutes) < end_minutes && current_minutes >= end_minutes;
+              
+              ESP_LOGD("schedule", "Crossed start: %s, Crossed end: %s", 
+                       crossed_start ? "YES" : "NO", crossed_end ? "YES" : "NO");
+              
+              if (crossed_start) {
+                ESP_LOGI("schedule", "Crossed start threshold - entering nighttime");
+                id(nighttime_active) = true;
+                id(previous_fan_state) = id(fan_1).state;
+                id(previous_auto_control_state) = id(fan_curve_control)->state;
+                
+                id(fan_curve_control)->turn_off();
+                auto call1 = id(fan_1).turn_off();
+                call1.perform();
+              }
+              
+              // Check if we crossed the end threshold
+              if (crossed_end) {
+                ESP_LOGI("schedule", "Crossed end threshold - exiting nighttime");
+                id(nighttime_active) = false;
+                
+                if (id(previous_auto_control_state)) {
+                  id(fan_curve_control)->turn_on();
+                }
+                
+                if (id(previous_fan_state)) {
+                  auto call1 = id(fan_1).turn_on();
+                  call1.perform();
+                }
+              }
+            } else {
+              ESP_LOGD("schedule", "First run - initializing last_check_minutes");
+            }
+            
+            id(last_check_minutes) = current_minutes;
+          }
+          
+          // Run fan curve control only if not in nighttime and auto control is enabled
+          if (!id(nighttime_active) && id(fan_curve_control)->state && id(temperature_ds18b20_1)->has_state()) {
             // Only proceed if auto control is enabled and temp sensor has valid reading
             id(calculate_curve_speed_ptr)(id(temperature_ds18b20_1)->state);
             
@@ -471,6 +654,16 @@ debug:
   update_interval: 5s
 
 text_sensor:
+  - platform: template
+    name: "Nighttime Status"
+    id: nighttime_status
+    lambda: |-
+      if (id(nighttime_active)) {
+        return {"Active"};
+      } else {
+        return {"Inactive"};
+      }
+    update_interval: 10s
   - platform: debug
     device:
       name: "Device Info"
