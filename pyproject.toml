@@ -5,5 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-    "esphome>=2025.3.1",
+    "esphome>=2025.12.5",
+    "pip>=25.3",
+    "wheel>=0.45.1",
 ]

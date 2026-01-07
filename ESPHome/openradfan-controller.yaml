@@ -22,6 +22,13 @@ esphome:
     version: "1.2"
   on_boot:
     then:
+      # indicate we have power with red LED
+      - light.turn_on:
+          id: atom_light
+          red: 100%
+          green: 0%
+          blue: 0%
+          brightness: 15%
       # These functions calculate the current Fan Curve Speed and also enforce constraints on the inputs,
       # i.e. increasing temperature points
       - lambda: |-
@@ -125,6 +132,14 @@ wifi:
   # Set up a wifi access point
   ap:
     password: "OpenRadFan"
+  on_connect:
+    then:
+      - light.turn_on:
+          id: atom_light
+          red: 0%
+          green: 100%
+          blue: 0%
+          brightness: 15%
 
 # In combination with the `ap` this allows the user
 # to provision wifi credentials to the device.
@@ -461,3 +476,18 @@ text_sensor:
       name: "Device Info"
     reset_reason:
       name: "Reset Reason"
+
+light:
+  - platform: esp32_rmt_led_strip
+    rgb_order: GRB
+    pin: GPIO27
+    num_leds: 1
+    chipset: sk6812
+    name: "Atom RGB Light"
+    id: atom_light
+    restore_mode: RESTORE_DEFAULT_OFF
+    effects:
+      - random:
+          name: "Random"
+          transition_length: 1s
+          update_interval: 1s 
