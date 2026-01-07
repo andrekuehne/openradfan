@@ -111,6 +111,13 @@ esp32:
   board: m5stack-atom
   framework:
     type: esp-idf
+    sdkconfig_options:
+      CONFIG_LWIP_MAX_SOCKETS: "16"
+      CONFIG_PM_ENABLE: "n"
+      # Prevent IDF from trying to power-down UART in light sleep, which causes
+      # uart_param_config to return ESP_ERR_NOT_SUPPORTED on some targets
+      CONFIG_PM_POWER_DOWN_PERIPHERAL_IN_LIGHT_SLEEP: "n"
+      CONFIG_UART_ISR_IN_IRAM: "y"
 
 # API is a requirement of the dashboard import.
 api:
