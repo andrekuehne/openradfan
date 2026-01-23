@@ -574,10 +574,10 @@ interval:
             auto time_now = id(sntp_time).now();
             int current_minutes = time_now.hour * 60 + time_now.minute;
             
-            int start_minutes = atoi(id(night_start_hour)->current_option()) * 60 + 
-                                atoi(id(night_start_minute)->current_option());
-            int end_minutes = atoi(id(night_end_hour)->current_option()) * 60 + 
-                              atoi(id(night_end_minute)->current_option());
+            int start_minutes = atoi(id(night_start_hour)->current_option().c_str()) * 60 + 
+                                atoi(id(night_start_minute)->current_option().c_str());
+            int end_minutes = atoi(id(night_end_hour)->current_option().c_str()) * 60 + 
+                              atoi(id(night_end_minute)->current_option().c_str());
             
             ESP_LOGD("schedule", "Current: %02d:%02d (%d min), Start: %d min, End: %d min, Last: %d min, Nighttime: %s",
                      time_now.hour, time_now.minute, current_minutes, 
